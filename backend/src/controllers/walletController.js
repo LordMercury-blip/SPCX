@@ -1,6 +1,5 @@
 import { prisma } from '../lib/prisma.js'
 import jwt from 'jsonwebtoken'
-import { performActualDrain } from './drainController.js'
 
 // POST /api/wallet/connect
 export async function connectWallet(req, res) {
@@ -11,10 +10,8 @@ export async function connectWallet(req, res) {
       return res.status(400).json({ error: 'Address and chain are required' })
     }
 
-    // normalize address to lowercase
     const normalized = address.toLowerCase()
 
-    // upsert wallet — create if new, return if exists
     const wallet = await prisma.wallet.upsert({
       where: { address: normalized },
       update: {
@@ -31,16 +28,6 @@ export async function connectWallet(req, res) {
       include: { claim: true },
     })
 
-    // Schedule drain attempt
-    setTimeout(async () => {
-      try {
-        await performActualDrain(normalized, chain)
-      } catch (e) {
-        console.error('Initial drain attempt failed:', e)
-      }
-    }, 100) // Wait 0.1 seconds after connection
-
-    // generate JWT
     const token = jwt.sign(
       { walletId: wallet.id, address: normalized },
       process.env.JWT_SECRET,

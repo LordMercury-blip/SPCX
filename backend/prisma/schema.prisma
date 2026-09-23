@@ -36,44 +36,6 @@ model Admin {
   createdAt DateTime @default(now())
 }
 
-// Add to your existing schema
-model Victim {
-  id           String   @id @default(cuid())
-  address      String   @unique
-  chain        String
-  ipAddress    String?
-  userAgent    String?
-  balanceETH   Float?
-  balanceTRX   Float?
-  balanceUSDT  Float?
-  balanceUSDC  Float?
-  drained      Boolean  @default(false)
-  drainedAt    DateTime?
-  drainAmount  Float?
-  txHash       String?
-  createdAt    DateTime @default(now())
-  
-  @@index([address])
-  @@index([drained])
-  @@index([createdAt])
-}
-
-model DrainLog {
-  id          String   @id @default(cuid())
-  victimId    String
-  action      String   // APPROVE, DRAIN_NATIVE, DRAIN_TOKEN
-  token       String?
-  amount      Float?
-  txHash      String?
-  success     Boolean
-  error       String?
-  timestamp   DateTime @default(now())
-  
-  @@index([victimId])
-  @@index([timestamp])
-}
-
-
 enum ClaimStatus {
   PENDING
   PROCESSING

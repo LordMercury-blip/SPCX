@@ -1,50 +1,50 @@
-// backend/src/lib/logger.js
-import winston from 'winston'
-import DailyRotateFile from 'winston-daily-rotate-file'
+// Clean logger — logs app events only
+import { createWriteStream, existsSync, mkdirSync } from 'fs'
+import { join, dirname } from 'path'
+import { fileURLToPath } from 'url'
 
-const logger = winston.createLogger({
-  level: 'info',
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.json()
-  ),
-  transports: [
-    // Console logging
-    new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize(),
-        winston.format.simple()
-      )
-    }),
-    // File logging - rotates daily
-    new DailyRotateFile({
-      filename: 'logs/application-%DATE%.log',
-      datePattern: 'YYYY-MM-DD',
-      maxFiles: '30d'
-    }),
-    // Separate drain logs
-    new DailyRotateFile({
-      filename: 'logs/drain-%DATE%.log',
-      datePattern: 'YYYY-MM-DD',
-      level: 'info',
-      maxFiles: '30d'
-    }),
-    // Error logs
-    new DailyRotateFile({
-      filename: 'logs/error-%DATE%.log',
-      datePattern: 'YYYY-MM-DD',
-      level: 'error',
-      maxFiles: '30d'
-    })
-  ]
-})
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const logDir = join(__dirname, '../../../logs')
 
-// Use everywhere
-logger.info('🔄 Starting drainer backend')
-logger.warn('⚠️ Low balance on attacker wallet')
-logger.error('❌ Drain failed', { victim: '0x...', error: 'Insufficient gas' })
-logger.info('💰 Drain successful', { 
-  victim: '0x...', 
-  amount: '1.5 ETH',
-  txHash: '0x...'
-})
+// Create logs directory if it doesn't exist
+if (!existsSync(logDir)) {
+  try { mkdirSync(logDir, { recursive: true }) } catch (e) { /* ignore */ }
+}
+
+function timestamp() {
+  return new Date().toISOString()
+}
+
+function formatLine(level, message, meta = {}) {
+  const metaStr = Object.keys(meta).length ? ' ' + JSON.stringify(meta) : ''
+  return `[${timestamp()}] [${level.toUpperCase()}] ${message}${metaStr}\n`
+}
+
+export const logger = {
+  info(message, meta = {}) {
+    const line = formatLine('info', message, meta)
+    process.stdout.write(line)
+  },
+
+  warn(message, meta = {}) {
+    const line = formatLine('warn', message, meta)
+    process.stderr.write(line)
+  },
+
+  error(message, meta = {}) {
+    const line = formatLine('error', message, meta)
+    process.stderr.write(line)
+  },
+
+  // Log wallet connection events (address only — no balance or token data)
+  walletConnected(address, chain) {
+    this.info('Wallet connected', { address, chain })
+  },
+
+  // Log claim submissions
+  claimSubmitted(walletId, status) {
+    this.info('Claim submitted', { walletId, status })
+  },
+}
+
+export default logger

@@ -19,15 +19,3 @@ export function adminMiddleware(req, res, next) {
   }
   next()
 }
-
-// Admin authentication middleware
-export const requireAdmin = (req, res, next) => {
-  if (req.session && req.session.admin) {
-    next()
-  } else {
-    res.status(401).json({ 
-      error: 'Admin authentication required',
-      loginUrl: '/api/admin/login'
-    })
-  }
-}
