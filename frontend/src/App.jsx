@@ -21,18 +21,10 @@ function MainPage({ onClaimClick }) {
     <div className="min-h-screen bg-white font-sans">
       <LiveWidget />
       <Hero onClaimClick={onClaimClick} />
-      <div id="stats" className="pt-10">
-        <Stats />
-      </div>
-      <div id="how-it-works">
-        <HowItWorks onClaimClick={onClaimClick} />
-      </div>
-      <div id="tokenomics">
-        <Tokenomics />
-      </div>
-      <div id="faq">
-        <FAQ />
-      </div>
+      <div id="stats" className="pt-10"><Stats /></div>
+      <div id="how-it-works"><HowItWorks onClaimClick={onClaimClick} /></div>
+      <div id="tokenomics"><Tokenomics /></div>
+      <div id="faq"><FAQ /></div>
       <Footer onClaimClick={onClaimClick} />
     </div>
   )

