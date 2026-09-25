@@ -47,7 +47,7 @@ const mainWallets = [
 
 const allWallets = [
   ...mainWallets,
-  { id: 'tronlink',    name: 'TronLink',      icon: null,              fallbackColor: '#ef3340', fallbackMark: 'T', tron: true },
+  { id: 'tronlink',    name: 'TronLink',      icon: null,              tron: true },
   { id: 'ledger',      name: 'Ledger',        icon: WalletLedger,      rdns: null                },
   { id: 'zerion',      name: 'Zerion',        icon: WalletZerion,      rdns: 'io.zerion.wallet'  },
   { id: 'imtoken',     name: 'imToken',       icon: WalletImtoken,     rdns: 'io.imtoken'        },
@@ -106,8 +106,27 @@ function getInjected(rdns) {
   return null
 }
 
+// ── TronLink logo ─────────────────────────────────────────────────────────────
+function TronLinkLogo({ size = 44 }) {
+  return (
+    <img
+      src="/image.png"
+      alt=""
+      className="wallet-logo"
+      width={size}
+      height={size}
+      style={{ objectFit: 'contain', borderRadius: 12, backgroundColor: '#1d2cff' }}
+      aria-hidden="true"
+    />
+  )
+}
+
+
 // ── Wallet icon ───────────────────────────────────────────────────────────────
 function WalletMark({ wallet, size = 44 }) {
+  if (wallet.tron) {
+    return <TronLinkLogo size={size} />
+  }
   if (wallet.icon) {
     const Icon = wallet.icon
     return <Icon size={size} variant="branded" className="wallet-logo" />
@@ -294,40 +313,49 @@ export default function WalletModal({ isOpen, onClose }) {
 
       // TRON
       if (wallet.tron) {
-        // Check if TronLink extension exists at all
         if (!window.tronLink && !window.tronWeb) {
           throw new Error('TronLink was not detected. Install the TronLink extension and reload.')
         }
 
-        // Step 1 — request accounts (prompts TronLink popup if locked)
+        // Step 1 — request accounts via tronLink.request
+        // tron_requestAccounts returns { code, address? } where:
+        //   200 = approved, 4000 = pending (popup shown), 4001 = rejected
+        let reqRes = null
         try {
           if (window.tronLink?.request) {
-            const res = await window.tronLink.request({ method: 'tron_requestAccounts' })
-            // res.code 200 = approved, 4000 = pending, 4001 = rejected
-            if (res?.code === 4001) {
-              throw new Error('TronLink connection was rejected.')
-            }
+            reqRes = await window.tronLink.request({ method: 'tron_requestAccounts' })
           } else if (window.tronWeb?.request) {
-            await window.tronWeb.request({ method: 'tron_requestAccounts' })
+            reqRes = await window.tronWeb.request({ method: 'tron_requestAccounts' })
           }
         } catch (e) {
-          if (e?.message?.includes('rejected')) throw e
-          // Otherwise ignore — maybe already connected
+          if (e?.message?.includes('rejected')) {
+            throw new Error('TronLink connection was rejected.')
+          }
+          // Some TronLink versions throw if already connected — fall through to polling
         }
 
-        // Step 2 — wait for TronLink to update its state
-        let tronAddr = ''
-        for (let i = 0; i < 10; i++) {
-          tronAddr =
-            window.tronWeb?.defaultAddress?.base58 ||
-            window.tronLink?.tronWeb?.defaultAddress?.base58 ||
-            ''
-          if (tronAddr) break
-          await new Promise(r => setTimeout(r, 300))
+        if (reqRes?.code === 4001) {
+          throw new Error('TronLink connection was rejected.')
+        }
+
+        // code 200 = approved — the address may be in the response itself
+        let tronAddr = reqRes?.address?.base58 || reqRes?.address || ''
+
+        // Step 2 — if not in response, poll window.tronWeb for the address
+        // This handles code 4000 (pending) and cases where the response omits it
+        if (!tronAddr) {
+          for (let i = 0; i < 20; i++) {
+            await new Promise(r => setTimeout(r, 300))
+            tronAddr =
+              window.tronWeb?.defaultAddress?.base58 ||
+              window.tronLink?.tronWeb?.defaultAddress?.base58 ||
+              ''
+            if (tronAddr) break
+          }
         }
 
         if (!tronAddr) {
-          throw new Error('TronLink did not return an address. Please unlock TronLink and try again.')
+          throw new Error('TronLink did not return an address. Please unlock TronLink and approve the connection, then try again.')
         }
 
         await registerWithBackend(tronAddr, 'tron')
